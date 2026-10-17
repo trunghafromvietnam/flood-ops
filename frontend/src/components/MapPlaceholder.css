@@ -1,0 +1,91 @@
+.map {
+  position: relative;
+  overflow: hidden;
+  background: #eceef1;
+  border-radius: var(--radius-lg);
+  min-height: 420px;
+}
+
+/* Fake street grid so the placeholder reads as a map */
+.map-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(#fff 3px, transparent 3px),
+    linear-gradient(90deg, #fff 3px, transparent 3px),
+    linear-gradient(#f7f8fa 1px, transparent 1px),
+    linear-gradient(90deg, #f7f8fa 1px, transparent 1px);
+  background-size: 120px 90px, 140px 120px, 30px 30px, 30px 30px;
+}
+
+.map-marker {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 0;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
+.map-marker-critical {
+  background: var(--red);
+}
+
+.map-marker-moderate {
+  background: var(--yellow);
+}
+
+.map-marker-team {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--blue);
+  clip-path: polygon(50% 5%, 61% 38%, 95% 38%, 67% 58%, 78% 92%, 50% 72%, 22% 92%, 33% 58%, 5% 38%, 39% 38%);
+}
+
+/* Location pin (client form) */
+.map-marker-pin {
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50% 50% 50% 0;
+  transform: translate(-50%, -100%) rotate(-45deg);
+  background: var(--navy);
+  box-shadow: none;
+}
+
+.map-marker-pin::after {
+  content: '';
+  position: absolute;
+  inset: 14px;
+  border-radius: 50%;
+  background: #fff;
+}
+
+/* Selected marker gets a soft halo in its own color */
+.map-marker.is-selected {
+  width: 36px;
+  height: 36px;
+  border-width: 4px;
+  box-shadow: 0 0 0 14px rgba(230, 57, 70, 0.25);
+}
+
+/* Rescued cases fade out but stay on the map */
+.map-marker.is-dimmed {
+  opacity: 0.35;
+}
+
+.map-marker:hover {
+  filter: brightness(1.1);
+}
+
+.map-marker-team.is-selected {
+  width: 44px;
+  height: 44px;
+  box-shadow: none;
+  filter: drop-shadow(0 0 10px rgba(29, 78, 216, 0.55));
+}
