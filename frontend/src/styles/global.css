@@ -159,6 +159,14 @@ textarea::placeholder {
   color: var(--text-faint);
 }
 
+.form-error {
+  padding: 10px 14px;
+  font-size: 14px;
+  color: var(--red);
+  background: var(--red-soft);
+  border-radius: var(--radius-sm);
+}
+
 .divider {
   height: 1px;
   background: var(--border);

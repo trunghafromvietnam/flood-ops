@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import Navbar from '../components/Navbar.jsx'
 import MapPlaceholder, { MapMarker } from '../components/MapPlaceholder.jsx'
 import { CLIENT_LINKS } from '../components/navLinks.js'
-import { DETECTED_ADDRESS, PICKED_ADDRESS } from '../data/mock.js'
+import { PICKED_ADDRESS } from '../data/mock.js'
+import { IMAGE_TYPES, createReport, uploadEvidence } from '../api.js'
 import './ReportPage.css'
 
 // Location modes. Auto-detect is the default; the other two are optional.
@@ -20,31 +21,89 @@ const MODE_HINTS = {
 }
 
 const ROLES = [
-  { id: 'victim', label: 'I am the victim' },
-  { id: 'witness', label: 'Reporting for someone else' },
+  { id: 'victim', label: 'I am the victim', reporterType: 'SELF' },
+  { id: 'witness', label: 'Reporting for someone else', reporterType: 'THIRD_PARTY' },
 ]
 
 const MAX_DESCRIPTION = 500
+
+// Same rule as the backend: optional "+", then 6–31 digits, spaces or ( ) . -
+const PHONE_PATTERN = /^\+?[0-9 ().-]{6,31}$/
 
 export default function ReportPage() {
   const [mode, setMode] = useState('auto')
   const [typedAddress, setTypedAddress] = useState('')
   const [pickedAddress, setPickedAddress] = useState('')
   const [role, setRole] = useState('victim')
+  const [phone, setPhone] = useState('')
   const [people, setPeople] = useState(1)
   const [photos, setPhotos] = useState([])
   const [description, setDescription] = useState('')
-  const [submitted, setSubmitted] = useState(false)
+  const [coords, setCoords] = useState(null)
+  const [geoError, setGeoError] = useState('')
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState('')
+  const [result, setResult] = useState(null) // { id, photosSent, photosFailed }
+
+  // Auto-detect: ask the browser for GPS once, the first time this mode is shown.
+  useEffect(() => {
+    if (mode !== 'auto' || coords || geoError) return
+    if (!navigator.geolocation) {
+      setGeoError('This browser cannot share its location. Type the address instead.')
+      return
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => setCoords({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
+      () => setGeoError('Could not get your location. Type the address or pick it on the map.'),
+      { enableHighAccuracy: true, timeout: 15000 },
+    )
+  }, [mode, coords, geoError])
 
   const address =
-    mode === 'auto' ? DETECTED_ADDRESS : mode === 'type' ? typedAddress : pickedAddress
-  const canSubmit = address.trim() !== '' && people >= 1
+    mode === 'auto'
+      ? coords
+        ? `${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}`
+        : ''
+      : mode === 'type'
+        ? typedAddress
+        : pickedAddress
+  const phoneValid = phone.trim() === '' || PHONE_PATTERN.test(phone.trim())
+  const canSubmit = address.trim() !== '' && people >= 1 && phoneValid && !sending
 
-  function handleSubmit(e) {
+  function buildLocation() {
+    if (mode === 'auto') return { ...coords, method: 'GPS' }
+    if (mode === 'type') return { method: 'MANUAL', address_text: typedAddress.trim() }
+    return { method: 'MAP_PIN', address_text: pickedAddress }
+  }
+
+  async function handleSubmit(e) {
     e.preventDefault()
     if (!canSubmit) return
-    // TODO(api): POST the report (address, role, people, photos, description) to the backend.
-    setSubmitted(true)
+    setSending(true)
+    setError('')
+    try {
+      const incident = await createReport({
+        description: description.trim() || null,
+        people_count: people,
+        phone: phone.trim() || null,
+        reporter_type: ROLES.find((r) => r.id === role).reporterType,
+        location: buildLocation(),
+      })
+      // The report is already saved; a failed photo should not undo that.
+      let photosFailed = 0
+      for (const photo of photos) {
+        try {
+          await uploadEvidence(incident.id, photo)
+        } catch {
+          photosFailed += 1
+        }
+      }
+      setResult({ id: incident.id, photosSent: photos.length - photosFailed, photosFailed })
+    } catch (err) {
+      setError(`Could not send the report: ${err.message}`)
+    } finally {
+      setSending(false)
+    }
   }
 
   function resetForm() {
@@ -52,10 +111,12 @@ export default function ReportPage() {
     setTypedAddress('')
     setPickedAddress('')
     setRole('victim')
+    setPhone('')
     setPeople(1)
     setPhotos([])
     setDescription('')
-    setSubmitted(false)
+    setError('')
+    setResult(null)
   }
 
   return (
@@ -77,7 +138,7 @@ export default function ReportPage() {
 
         <div className="report-layout">
           {/* ---------- Left: form or confirmation ---------- */}
-          {submitted ? (
+          {result ? (
             <section className="card report-form report-done">
               <h2 className="done-title">Your report was sent</h2>
               <p className="page-subtitle">
@@ -86,18 +147,34 @@ export default function ReportPage() {
               </p>
               <dl className="done-summary">
                 <div>
+                  <dt>Report ID</dt>
+                  <dd>{result.id}</dd>
+                </div>
+                <div>
                   <dt>Location</dt>
                   <dd>{address}</dd>
                 </div>
+                {phone.trim() && (
+                  <div>
+                    <dt>Phone</dt>
+                    <dd>{phone.trim()}</dd>
+                  </div>
+                )}
                 <div>
                   <dt>People</dt>
                   <dd>{people}</dd>
                 </div>
                 <div>
                   <dt>Photos</dt>
-                  <dd>{photos.length}</dd>
+                  <dd>{result.photosSent}</dd>
                 </div>
               </dl>
+              {result.photosFailed > 0 && (
+                <p className="form-error">
+                  {result.photosFailed} photo{result.photosFailed > 1 ? 's' : ''} could not be
+                  uploaded. Your report was still sent.
+                </p>
+              )}
               <div className="done-actions">
                 <Link to="/track" className="btn btn-primary">
                   Track my report
@@ -135,7 +212,8 @@ export default function ReportPage() {
                   <input
                     className="input"
                     readOnly
-                    value={`Detected: ${DETECTED_ADDRESS}`}
+                    placeholder={geoError || 'Detecting your location…'}
+                    value={coords ? `Detected: ${address}` : ''}
                     aria-label="Detected address"
                   />
                 )}
@@ -184,10 +262,33 @@ export default function ReportPage() {
 
               <hr className="divider" />
 
-              {/* 3 + 4. People and photos side by side */}
+              {/* 3. Phone */}
+              <section className="field">
+                <h2 className="field-label">3. Phone number (optional)</h2>
+                <input
+                  className="input"
+                  type="tel"
+                  name="phone"
+                  autoComplete="tel"
+                  placeholder="+84 905 123 456"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  aria-invalid={!phoneValid}
+                  aria-label="Phone number"
+                />
+                <p className={phoneValid ? 'hint' : 'form-error'}>
+                  {phoneValid
+                    ? 'Rescue teams use this to call you back.'
+                    : 'Use digits only, with an optional + at the start.'}
+                </p>
+              </section>
+
+              <hr className="divider" />
+
+              {/* 4 + 5. People and photos side by side */}
               <div className="field-row">
                 <section className="field">
-                  <h2 className="field-label">3. People at location *</h2>
+                  <h2 className="field-label">4. People at location *</h2>
                   <div className="stepper">
                     <button
                       type="button"
@@ -220,12 +321,12 @@ export default function ReportPage() {
                 </section>
 
                 <section className="field">
-                  <h2 className="field-label">4. Photos (optional)</h2>
+                  <h2 className="field-label">5. Photos (optional)</h2>
                   <label className="upload">
                     <input
                       type="file"
                       name="photos"
-                      accept="image/*"
+                      accept={IMAGE_TYPES.join(',')}
                       capture="environment"
                       multiple
                       onChange={(e) => setPhotos(Array.from(e.target.files ?? []))}
@@ -240,9 +341,9 @@ export default function ReportPage() {
 
               <hr className="divider" />
 
-              {/* 5. Description */}
+              {/* 6. Description */}
               <section className="field">
-                <h2 className="field-label">5. Description (optional)</h2>
+                <h2 className="field-label">6. Description (optional)</h2>
                 <div className="textarea-wrap">
                   <textarea
                     name="description"
@@ -258,8 +359,10 @@ export default function ReportPage() {
                 </div>
               </section>
 
+              {error && <p className="form-error">{error}</p>}
+
               <button type="submit" className="btn btn-primary submit-button" disabled={!canSubmit}>
-                Send Rescue Request
+                {sending ? 'Sending…' : 'Send Rescue Request'}
               </button>
             </form>
           )}

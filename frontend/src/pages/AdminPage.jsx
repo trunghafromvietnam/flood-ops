@@ -1,9 +1,10 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Navbar from '../components/Navbar.jsx'
 import MapPlaceholder, { MapMarker } from '../components/MapPlaceholder.jsx'
 import { StarIcon } from '../components/Icons.jsx'
 import { ADMIN_LINKS } from '../components/navLinks.js'
 import { MARKERS } from '../data/mock.js'
+import { listIncidents, parseServerTime, updateStatus } from '../api.js'
 import './AdminPage.css'
 
 const FILTERS = [
@@ -16,8 +17,79 @@ const FILTERS = [
 
 const MIN_MAP = 35
 const MAX_MAP = 80
+const REFRESH_MS = 10000
 
-function matchesFilter(marker, filter, rescued) {
+// Rescue teams have no backend API yet, so they still come from mock data.
+const TEAMS = MARKERS.filter((m) => m.kind === 'team')
+
+const CLOSED_STATUSES = new Set(['RESOLVED', 'REJECTED', 'DUPLICATE'])
+
+function isRescued(marker) {
+  return marker.status === 'RESOLVED'
+}
+
+function isOpenCase(marker) {
+  return marker.kind === 'case' && !CLOSED_STATUSES.has(marker.status)
+}
+
+// Status a case goes back to when "rescued" is unticked.
+function initialStatus(incident) {
+  return incident.reporter_type === 'DRONE' ? 'NEEDS_REVIEW' : 'NEW'
+}
+
+function formatReported(createdAt) {
+  const date = parseServerTime(createdAt)
+  if (!date) return null
+  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const minutes = Math.max(0, Math.round((Date.now() - date) / 60000))
+  const ago = minutes < 60 ? `${minutes} min ago` : `${Math.floor(minutes / 60)} h ago`
+  return `${time} · ${ago}`
+}
+
+// Matches the map legend: phone calls and drones are critical, web forms moderate.
+const CRITICAL_SOURCES = new Set(['PHONE_CALL', 'DRONE'])
+
+const SOURCES = {
+  PHONE_CALL: 'Phone call (AI line)',
+  DRONE: 'Drone',
+  SELF: 'Web form · victim',
+  THIRD_PARTY: 'Web form · someone else',
+}
+
+// Turn backend incidents into map markers. The map is still a placeholder,
+// so coordinates are spread over the box (10–90%) by their bounding box.
+// Incidents without coordinates get no x / y and only show up in search.
+function toCaseMarkers(incidents) {
+  const located = incidents.filter((i) => i.latitude != null && i.longitude != null)
+  const lats = located.map((i) => i.latitude)
+  const lons = located.map((i) => i.longitude)
+  const [minLat, maxLat] = [Math.min(...lats), Math.max(...lats)]
+  const [minLon, maxLon] = [Math.min(...lons), Math.max(...lons)]
+  const scale = (value, min, max) => (max === min ? 50 : 10 + (80 * (value - min)) / (max - min))
+
+  return incidents.map((i) => {
+    const hasCoords = i.latitude != null && i.longitude != null
+    return {
+      id: i.id,
+      kind: 'case',
+      level: CRITICAL_SOURCES.has(i.reporter_type) ? 'critical' : 'moderate',
+      source: SOURCES[i.reporter_type] ?? i.reporter_type,
+      status: i.status,
+      initialStatus: initialStatus(i),
+      x: hasCoords ? scale(i.longitude, minLon, maxLon) : null,
+      y: hasCoords ? 100 - scale(i.latitude, minLat, maxLat) : null,
+      address:
+        i.address_text ??
+        (hasCoords ? `${i.latitude.toFixed(5)}, ${i.longitude.toFixed(5)}` : 'Unknown location'),
+      phone: i.phone,
+      people: i.people_count != null ? String(i.people_count) : null,
+      reported: formatReported(i.created_at),
+      description: i.description || 'No description.',
+    }
+  })
+}
+
+function matchesFilter(marker, filter) {
   switch (filter) {
     case 'critical':
       return marker.kind === 'case' && marker.level === 'critical'
@@ -26,7 +98,7 @@ function matchesFilter(marker, filter, rescued) {
     case 'teams':
       return marker.kind === 'team'
     case 'open':
-      return marker.kind === 'case' && !rescued.has(marker.id)
+      return isOpenCase(marker)
     default:
       return true
   }
@@ -47,9 +119,9 @@ function detailRows(marker) {
     marker.kind === 'case'
       ? [
           ['Source', marker.source],
+          ['Status', marker.status],
           ['Phone', marker.phone, true],
           ['People', marker.people],
-          ['Injuries', marker.injuries],
           ['Situation', marker.situation],
           ['Reported', marker.reported],
           ['Nearest team', marker.nearestTeam],
@@ -60,42 +132,63 @@ function detailRows(marker) {
           ['Members', marker.members],
           ['Equipment', marker.equipment],
           ['Current case', marker.currentCase],
-          ['Free in', marker.freeIn],
           ['Cases nearby', marker.nearbyCases],
         ]
   return rows.filter(([, value]) => value)
 }
 
+// Keep a leading "+" for international numbers, drop spaces and punctuation.
 function telHref(phone) {
-  return `tel:+1${phone.replace(/\D/g, '')}`
+  return `tel:${phone.replace(/[^\d+]/g, '')}`
 }
 
 export default function AdminPage() {
-  const [selectedId, setSelectedId] = useState('FO-0412')
+  const [incidents, setIncidents] = useState([])
+  const [loadError, setLoadError] = useState('')
+  const [selectedId, setSelectedId] = useState(null)
   const [filter, setFilter] = useState('all')
   const [query, setQuery] = useState('')
-  const [rescued, setRescued] = useState(() => new Set())
-  const [teamStatus, setTeamStatus] = useState({})
   const [mapSize, setMapSize] = useState(62)
   const splitRef = useRef(null)
 
-  const visible = MARKERS.filter((m) => matchesFilter(m, filter, rescued) && matchesQuery(m, query))
-  const selected = MARKERS.find((m) => m.id === selectedId)
-  const openCases = MARKERS.filter((m) => m.kind === 'case' && !rescued.has(m.id)).length
-  const teamCount = MARKERS.filter((m) => m.kind === 'team').length
+  // Poll the backend so new reports and drone images show up without a reload.
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const data = await listIncidents()
+        if (cancelled) return
+        data.sort((a, b) => parseServerTime(b.created_at) - parseServerTime(a.created_at))
+        setIncidents(data)
+        setLoadError('')
+        setSelectedId((id) => id ?? data[0]?.id ?? null)
+      } catch (err) {
+        if (!cancelled) setLoadError(err.message)
+      }
+    }
+    load()
+    const timer = setInterval(load, REFRESH_MS)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [])
 
-  function toggleRescued(id) {
-    // TODO(api): save rescued status to the backend.
-    setRescued((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
+  const markers = [...toCaseMarkers(incidents), ...TEAMS]
+  const visible = markers.filter((m) => matchesFilter(m, filter) && matchesQuery(m, query))
+  const selected = markers.find((m) => m.id === selectedId)
+  const openCases = markers.filter(isOpenCase).length
+  const unmapped = markers.filter((m) => m.kind === 'case' && m.x == null).length
+  const teamCount = TEAMS.length
 
-  function statusOf(team) {
-    return teamStatus[team.id] ?? team.status
+  async function toggleRescued(marker) {
+    const next = isRescued(marker) ? marker.initialStatus : 'RESOLVED'
+    try {
+      const updated = await updateStatus(marker.id, next, 'Changed from dispatcher map')
+      setIncidents((prev) => prev.map((i) => (i.id === updated.id ? updated : i)))
+    } catch (err) {
+      setLoadError(`Could not update ${marker.id}: ${err.message}`)
+    }
   }
 
   // ---- Drag handle: resize map vs. panel ----
@@ -132,19 +225,21 @@ export default function AdminPage() {
         <h1 className="page-title">Rescue Operations Map</h1>
         <p className="page-subtitle">
           Live · {openCases} open cases · {teamCount} rescue teams nearby
+          {unmapped > 0 && ` · ${unmapped} without coordinates (search to find them)`}
         </p>
+        {loadError && <p className="form-error">Backend error: {loadError}</p>}
 
         <div className="admin-split" ref={splitRef} style={{ '--map-size': `${mapSize}%` }}>
           {/* ---------- Map ---------- */}
           <MapPlaceholder className="admin-map">
-            {visible.map((m) => (
+            {visible.filter((m) => m.x != null).map((m) => (
               <MapMarker
                 key={m.id}
                 type={m.kind === 'team' ? 'team' : m.level}
                 x={m.x}
                 y={m.y}
                 selected={m.id === selectedId}
-                dimmed={rescued.has(m.id)}
+                dimmed={isRescued(m)}
                 label={m.kind === 'team' ? m.id : `Case ${m.id}`}
                 onClick={() => setSelectedId(m.id)}
               />
@@ -232,15 +327,8 @@ export default function AdminPage() {
             {selected && (
               <Detail
                 marker={selected}
-                isRescued={rescued.has(selected.id)}
-                onToggleRescued={() => toggleRescued(selected.id)}
-                teamStatus={selected.kind === 'team' ? statusOf(selected) : null}
-                onToggleTeam={() =>
-                  setTeamStatus((prev) => ({
-                    ...prev,
-                    [selected.id]: statusOf(selected) === 'available' ? 'busy' : 'available',
-                  }))
-                }
+                isRescued={isRescued(selected)}
+                onToggleRescued={() => toggleRescued(selected)}
               />
             )}
 
@@ -252,11 +340,11 @@ export default function AdminPage() {
   )
 }
 
-function Detail({ marker, isRescued, onToggleRescued, teamStatus, onToggleTeam }) {
+function Detail({ marker, isRescued, onToggleRescued }) {
   const isCase = marker.kind === 'case'
 
-  let badgeClass = 'badge-blue'
-  let badgeText = teamStatus === 'available' ? 'AVAILABLE' : 'ON A MISSION'
+  let badgeClass = null
+  let badgeText = null
   if (isCase) {
     const fromDrone = marker.source.startsWith('Drone')
     badgeClass = marker.level === 'critical' ? 'badge-red' : 'badge-yellow'
@@ -274,7 +362,7 @@ function Detail({ marker, isRescued, onToggleRescued, teamStatus, onToggleTeam }
     <section className="detail">
       <div className="detail-head">
         <span className="detail-id">{isCase ? `CASE #${marker.id}` : 'RESCUE TEAM'}</span>
-        <span className={`badge ${badgeClass}`}>{badgeText}</span>
+        {badgeText && <span className={`badge ${badgeClass}`}>{badgeText}</span>}
       </div>
       <h2 className="detail-title">{isCase ? marker.address : marker.id}</h2>
 
@@ -288,28 +376,18 @@ function Detail({ marker, isRescued, onToggleRescued, teamStatus, onToggleTeam }
       </dl>
 
       <div className="detail-summary">
-        <h3>{isCase ? 'AI summary' : 'Current task'}</h3>
-        <p>{isCase ? marker.summary : marker.task}</p>
+        <h3>{isCase ? 'Description' : 'Current task'}</h3>
+        <p>{isCase ? marker.description : marker.task}</p>
       </div>
 
       <div className="detail-actions">
-        {isCase ? (
+        {isCase && (
           <label className="rescued-check">
             <input type="checkbox" checked={isRescued} onChange={onToggleRescued} />
             <span>
               <strong>Mark as rescued</strong>
               <small className={isRescued ? 'is-ok' : ''}>
                 Status: {isRescued ? 'rescued' : 'waiting for rescue'}
-              </small>
-            </span>
-          </label>
-        ) : (
-          <label className="rescued-check">
-            <input type="checkbox" checked={teamStatus === 'available'} onChange={onToggleTeam} />
-            <span>
-              <strong>Available for new case</strong>
-              <small className={teamStatus === 'available' ? 'is-ok' : ''}>
-                Status: {teamStatus === 'available' ? 'free' : 'busy'}
               </small>
             </span>
           </label>
@@ -325,10 +403,6 @@ function Detail({ marker, isRescued, onToggleRescued, teamStatus, onToggleTeam }
               No phone
             </button>
           )}
-          {/* TODO(api): assign / dispatch through the backend */}
-          <button type="button" className="btn btn-primary">
-            {isCase ? 'Assign team' : 'Send to case'}
-          </button>
         </div>
       </div>
     </section>
