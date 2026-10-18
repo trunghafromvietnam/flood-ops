@@ -1,0 +1,43 @@
+:root {
+  --color-primary: #1677e8;
+  --color-primary-hover: #0f63c6;
+  --color-navy: #102b40;
+
+  --color-background: #f5f7fa;
+  --color-surface: #ffffff;
+  --color-surface-muted: #eef2f6;
+
+  --color-text: #172b3a;
+  --color-text-secondary: #667789;
+  --color-border: #dce3ea;
+
+  --color-success: #16845b;
+  --color-warning: #d99116;
+  --color-critical: #d9363e;
+  --color-flood: #55b7d1;
+
+  --color-focus: #0b72e7;
+  --color-disabled: #a0aab5;
+
+  /* Darker text variants so tinted badges keep AA contrast. */
+  --color-success-text: #0f6847;
+  --color-warning-text: #8a5a00;
+  --color-critical-text: #b0242b;
+  --color-sim: #6b4fbb;
+
+  --header-height: 60px;
+  --operations-panel-width: 380px;
+  --radius-small: 6px;
+  --radius-medium: 10px;
+  --radius-large: 14px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --shadow-overlay: 0 4px 16px rgba(16, 43, 64, 0.12);
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}

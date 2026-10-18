@@ -1,0 +1,11 @@
+@"
+.venv/
+__pycache__/
+*.pyc
+uploads/
+*.db
+.pytest_cache/
+.env
+.DS_Store
+.claude/
+"@ | Out-File -FilePath .gitignore -Encoding utf8

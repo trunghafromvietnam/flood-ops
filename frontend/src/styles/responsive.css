@@ -1,0 +1,227 @@
+/* Tablet: 768–1199px */
+@media (max-width: 1199px) {
+  :root {
+    --operations-panel-width: 330px;
+  }
+
+  .header-identity {
+    display: none;
+  }
+
+  .activity-toggle {
+    display: inline-flex;
+  }
+
+  .list-page.has-drawer {
+    grid-template-columns: minmax(0, 1fr) 360px;
+  }
+
+  .report-layout {
+    grid-template-columns: minmax(340px, 45%) minmax(0, 1fr);
+  }
+
+  .status-form {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .status-form .btn {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+}
+
+/* Mobile: below 768px. The map stays the primary canvas; panels stack below it. */
+@media (max-width: 767px) {
+  .app-header {
+    flex-wrap: wrap;
+    height: auto;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .header-search {
+    order: 3;
+    flex-basis: 100%;
+    max-width: none;
+  }
+
+  .header-right {
+    gap: var(--space-2);
+  }
+
+  .connection {
+    font-size: 11px;
+  }
+
+  .overview,
+  .split-page {
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    min-height: 100%;
+  }
+
+  .ops-main {
+    overflow-y: auto;
+  }
+
+  .overview-map,
+  .split-map {
+    order: -1;
+    height: 55vh;
+    flex: none;
+  }
+
+  .ops-panel,
+  .split-list {
+    border-right: 0;
+    overflow: visible;
+  }
+
+  .list-page,
+  .list-page.has-drawer {
+    display: flex;
+    flex-direction: column;
+    height: auto;
+  }
+
+  .list-main {
+    padding: var(--space-4);
+    overflow: visible;
+  }
+
+  .drawer {
+    border-left: 0;
+    border-top: 1px solid var(--color-border);
+    overflow: visible;
+  }
+
+  .content-page {
+    padding: var(--space-4);
+    height: auto;
+  }
+
+  .map-drawer {
+    top: auto;
+    left: var(--space-2);
+    right: var(--space-2);
+    bottom: var(--space-2);
+    width: auto;
+    max-width: none;
+    max-height: 55%;
+  }
+
+  .map-overlay-bottom-left .map-legend {
+    display: none;
+  }
+
+  .map-toolbar {
+    max-width: calc(100% - 64px);
+  }
+
+  .map-search {
+    width: 100%;
+  }
+
+  .landing-main {
+    padding-top: var(--space-4);
+  }
+
+  .landing-hero {
+    grid-template-columns: 1fr;
+    gap: var(--space-5);
+  }
+
+  .drone-channels-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-3d-stage {
+    height: 320px;
+  }
+
+  .phao-card-ring {
+    width: 150px;
+    height: 150px;
+  }
+
+  .phao-card-vest {
+    width: 140px;
+    height: 140px;
+  }
+
+  .landing-title {
+    font-size: 26px;
+  }
+
+  .landing-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .landing-pillars {
+    grid-template-columns: 1fr;
+  }
+
+  .landing-quick-stats {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+
+  .public-header {
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .public-tagline {
+    display: none;
+  }
+
+  .report-page {
+    height: auto;
+  }
+
+  .report-layout {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .report-map {
+    order: -1;
+    height: 45vh;
+    flex: none;
+  }
+
+  .report-panel {
+    border-right: 0;
+    padding: var(--space-4);
+    overflow: visible;
+  }
+
+  .form-pair,
+  .field-pair {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-list > div {
+    grid-template-columns: 110px 1fr;
+  }
+
+  .btn,
+  .icon-button,
+  .segmented-item {
+    min-height: 40px;
+  }
+
+  .icon-button {
+    width: 40px;
+    height: 40px;
+  }
+}
+
+/* Mobile landscape: short screens. */
+@media (max-width: 1023px) and (max-height: 500px) {
+  .overview-map,
+  .split-map,
+  .report-map {
+    height: 80vh;
+  }
+}

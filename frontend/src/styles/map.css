@@ -1,0 +1,275 @@
+.map-view {
+  position: relative;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: #e9eef3;
+}
+
+.map-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.map-view:fullscreen {
+  width: 100vw;
+  height: 100vh;
+}
+
+.report-map.is-picking .map-canvas canvas {
+  cursor: crosshair;
+}
+
+.map-failure {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--space-5);
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+.map-banner {
+  position: absolute;
+  top: var(--space-3);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  padding: 6px 12px;
+  border-radius: var(--radius-small);
+  background: #fdf8ee;
+  color: var(--color-warning-text);
+  font-size: 12px;
+  box-shadow: var(--shadow-overlay);
+}
+
+.map-controls {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  z-index: 2;
+  display: grid;
+  gap: 4px;
+}
+
+.map-controls .icon-button {
+  box-shadow: var(--shadow-overlay);
+}
+
+.map-overlay {
+  position: absolute;
+  z-index: 2;
+}
+
+.map-overlay-top-left {
+  top: var(--space-3);
+  left: var(--space-3);
+}
+
+.map-overlay-bottom-left {
+  bottom: 36px;
+  left: var(--space-3);
+}
+
+.map-overlay-top-right {
+  top: var(--space-3);
+  right: 56px;
+}
+
+.map-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-2);
+  max-width: calc(100% - 80px);
+}
+
+.map-search {
+  display: flex;
+  gap: 4px;
+  width: 280px;
+  max-width: 100%;
+}
+
+.map-search .input {
+  box-shadow: var(--shadow-overlay);
+}
+
+.map-note {
+  flex-basis: 100%;
+  max-width: 420px;
+  padding: 6px 10px;
+  border-radius: var(--radius-small);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-overlay);
+  font-size: 12px;
+}
+
+.map-note.is-error {
+  color: var(--color-critical-text);
+}
+
+.map-note-top {
+  position: absolute;
+  z-index: 2;
+  top: 56px;
+  left: var(--space-3);
+  right: 56px;
+}
+
+.map-note-floating {
+  position: absolute;
+  bottom: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+}
+
+.map-legend,
+.layer-panel,
+.feature-panel {
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-medium);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow-overlay);
+  font-size: 12px;
+}
+
+.map-legend ul {
+  display: grid;
+  gap: 3px;
+}
+
+.map-legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.map-overlay-title {
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-secondary);
+}
+
+.legend-swatch {
+  display: inline-block;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(16, 43, 64, 0.2);
+}
+
+.legend-report {
+  background: var(--color-critical);
+  width: 14px;
+  height: 14px;
+}
+
+.legend-closed {
+  background: #8a96a3;
+}
+
+.legend-drone {
+  background: #fff;
+  border: 3px solid var(--color-navy);
+  box-shadow: none;
+}
+
+.legend-cluster {
+  background: var(--color-navy);
+  width: 16px;
+  height: 16px;
+}
+
+.legend-team {
+  background: var(--color-success);
+}
+
+.legend-team-stale {
+  background: #fff;
+  border: 2px solid var(--color-success);
+  box-shadow: none;
+}
+
+.legend-flood {
+  border-radius: 2px;
+  background: rgba(85, 183, 209, 0.45);
+  border: 1px dashed #2c8faa;
+  box-shadow: none;
+}
+
+.layer-control {
+  position: relative;
+}
+
+.layer-control > .btn {
+  box-shadow: var(--shadow-overlay);
+}
+
+.layer-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 230px;
+  display: grid;
+  gap: 6px;
+}
+
+.layer-row {
+  display: flex;
+  gap: var(--space-2);
+  font-size: 13px;
+}
+
+.layer-row.is-unavailable {
+  color: var(--color-text-secondary);
+}
+
+.feature-panel {
+  width: 300px;
+  max-width: calc(100vw - 100px);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.map-drawer {
+  position: absolute;
+  z-index: 3;
+  top: var(--space-3);
+  right: 56px;
+  bottom: var(--space-3);
+  width: 380px;
+  max-width: calc(100% - 80px);
+  padding: var(--space-4);
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-medium);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-overlay);
+}
+
+/* Page-specific map sizing */
+.overview-map,
+.split-map,
+.report-map {
+  height: 100%;
+}
+
+.live-map,
+.live-map-view {
+  position: relative;
+  height: 100%;
+}
+
+/* MapLibre attribution: keep it legible but compact. */
+.maplibregl-ctrl-attrib {
+  font-size: 11px;
+}
