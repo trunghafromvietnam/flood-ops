@@ -1,405 +1,444 @@
-import { useEffect, useState } from 'react'
+// Public emergency report: form (left) + interactive map (right).
+// Always talks to the live backend. Success is shown only after the server
+// confirms, with the ID the server returned.
+
+import { useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import Navbar from '../components/Navbar.jsx'
-import MapPlaceholder, { MapMarker } from '../components/MapPlaceholder.jsx'
-import { CLIENT_LINKS } from '../components/navLinks.js'
-import { PICKED_ADDRESS } from '../data/mock.js'
-import { IMAGE_TYPES, createReport, uploadEvidence } from '../api.js'
-import './ReportPage.css'
+import { ArrowLeft, Crosshair, FileText, LocateFixed, MapPin, Search, X } from 'lucide-react'
+import { LIMITS } from '../api/contracts.js'
+import { createReport, uploadIncidentEvidence } from '../api/floodops.js'
+import { searchPlace } from '../api/geocoder.js'
+import Logo from '../components/Logo.jsx'
+import { MapLegend } from '../components/MapOverlays.jsx'
+import MapView from '../map/MapView.jsx'
+import { formatCoords, locationMethodLabel } from '../lib/formatters.js'
+import {
+  REPORTED_SEVERITIES,
+  WATER_LEVELS,
+  buildReportDescription,
+  validateReportForm,
+} from '../lib/validation.js'
 
-// Location modes. Auto-detect is the default; the other two are optional.
-const LOCATION_MODES = [
-  { id: 'auto', label: 'Auto-detect (default)' },
-  { id: 'type', label: 'Type address' },
-  { id: 'map', label: 'Pick on map' },
-]
-
-const MODE_HINTS = {
-  auto: 'Wrong spot? Typing or picking on the map is optional.',
-  type: 'The map moves to the address you type.',
-  map: 'The pin in the middle of the map is the spot you send.',
+const EMPTY_FORM = {
+  reporterType: 'SELF',
+  coords: null,
+  locationMethod: null, // 'GPS' | 'MAP_PIN'
+  accuracy: null,
+  addressText: '',
+  waterLevel: '',
+  severity: '',
+  peopleText: '',
+  description: '',
+  phone: '',
+  photos: [],
 }
 
-const ROLES = [
-  { id: 'victim', label: 'I am the victim', reporterType: 'SELF' },
-  { id: 'witness', label: 'Reporting for someone else', reporterType: 'THIRD_PARTY' },
-]
-
-const MAX_DESCRIPTION = 500
-
-// Same rule as the backend: optional "+", then 6–31 digits, spaces or ( ) . -
-const PHONE_PATTERN = /^\+?[0-9 ().-]{6,31}$/
+const GEO_MESSAGES = {
+  requesting: 'Requesting your location. Your browser may ask for permission.',
+  denied: 'Location permission was denied. Pick the point on the map or describe the place instead.',
+  unavailable: 'Your device could not determine its location. Pick the point on the map or describe the place.',
+  timeout: 'Getting your location took too long. Try again, or pick the point on the map.',
+  unsupported: 'This browser cannot share its location. Pick the point on the map or describe the place.',
+}
 
 export default function ReportPage() {
-  const [mode, setMode] = useState('auto')
-  const [typedAddress, setTypedAddress] = useState('')
-  const [pickedAddress, setPickedAddress] = useState('')
-  const [role, setRole] = useState('victim')
-  const [phone, setPhone] = useState('')
-  const [people, setPeople] = useState(1)
-  const [photos, setPhotos] = useState([])
-  const [description, setDescription] = useState('')
-  const [coords, setCoords] = useState(null)
-  const [geoError, setGeoError] = useState('')
-  const [sending, setSending] = useState(false)
-  const [error, setError] = useState('')
-  const [result, setResult] = useState(null) // { id, photosSent, photosFailed }
+  const [form, setForm] = useState(EMPTY_FORM)
+  const [errors, setErrors] = useState({})
+  const [geoState, setGeoState] = useState(null)
+  const [picking, setPicking] = useState(false)
+  const [placeQuery, setPlaceQuery] = useState('')
+  const [placeNote, setPlaceNote] = useState(null)
+  const [focus, setFocus] = useState(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState('')
+  const [result, setResult] = useState(null)
+  const inFlight = useRef(false)
+  const fileInput = useRef(null)
+  const errorSummary = useRef(null)
 
-  // Auto-detect: ask the browser for GPS once, the first time this mode is shown.
-  useEffect(() => {
-    if (mode !== 'auto' || coords || geoError) return
+  const update = (patch) => setForm((f) => ({ ...f, ...patch }))
+  const descriptionPrefixLength = buildReportDescription({ ...form, description: '' }).length
+  const descriptionMax = LIMITS.descriptionMax - descriptionPrefixLength - (descriptionPrefixLength ? 2 : 0)
+
+  function requestCurrentLocation() {
     if (!navigator.geolocation) {
-      setGeoError('This browser cannot share its location. Type the address instead.')
+      setGeoState('unsupported')
       return
     }
+    setGeoState('requesting')
     navigator.geolocation.getCurrentPosition(
-      (pos) => setCoords({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
-      () => setGeoError('Could not get your location. Type the address or pick it on the map.'),
-      { enableHighAccuracy: true, timeout: 15000 },
+      (pos) => {
+        const coords = { lat: pos.coords.latitude, lon: pos.coords.longitude }
+        update({ coords, locationMethod: 'GPS', accuracy: Math.round(pos.coords.accuracy) })
+        setGeoState(null)
+        setPicking(false)
+        setFocus({ coords, zoom: 15, key: `gps-${Date.now()}` })
+      },
+      (err) => setGeoState(err.code === 1 ? 'denied' : err.code === 3 ? 'timeout' : 'unavailable'),
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 60000 },
     )
-  }, [mode, coords, geoError])
-
-  const address =
-    mode === 'auto'
-      ? coords
-        ? `${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}`
-        : ''
-      : mode === 'type'
-        ? typedAddress
-        : pickedAddress
-  const phoneValid = phone.trim() === '' || PHONE_PATTERN.test(phone.trim())
-  const canSubmit = address.trim() !== '' && people >= 1 && phoneValid && !sending
-
-  function buildLocation() {
-    if (mode === 'auto') return { ...coords, method: 'GPS' }
-    if (mode === 'type') return { method: 'MANUAL', address_text: typedAddress.trim() }
-    return { method: 'MAP_PIN', address_text: pickedAddress }
   }
 
-  async function handleSubmit(e) {
+  function onMapClick(coords) {
+    if (!picking) return
+    update({ coords, locationMethod: 'MAP_PIN', accuracy: null })
+    setPicking(false)
+  }
+
+  async function findPlace(e) {
     e.preventDefault()
-    if (!canSubmit) return
-    setSending(true)
-    setError('')
+    if (!placeQuery.trim()) return
+    setPlaceNote({ kind: 'info', text: 'Searching…' })
     try {
-      const incident = await createReport({
-        description: description.trim() || null,
-        people_count: people,
-        phone: phone.trim() || null,
-        reporter_type: ROLES.find((r) => r.id === role).reporterType,
-        location: buildLocation(),
+      const results = await searchPlace(placeQuery)
+      if (!results.length) {
+        setPlaceNote({ kind: 'error', text: 'No place found. Describe the location in the text field instead.' })
+        return
+      }
+      setFocus({ coords: results[0].coords, zoom: 14, key: `place-${Date.now()}` })
+      setPicking(true)
+      setPlaceNote({
+        kind: 'info',
+        text: `Map moved to ${results[0].label}. Tap the map to mark the exact point. The search result itself is not sent.`,
       })
-      // The report is already saved; a failed photo should not undo that.
+    } catch (error) {
+      setPlaceNote({ kind: 'error', text: error.message })
+    }
+  }
+
+  async function onSubmit(e) {
+    e.preventDefault()
+    if (inFlight.current) return // duplicate-submit guard (double click, Enter key)
+    const { errors: found, payload } = validateReportForm(form)
+    setErrors(found)
+    setSubmitError('')
+    if (!payload) {
+      requestAnimationFrame(() => errorSummary.current?.focus())
+      return
+    }
+
+    inFlight.current = true
+    setSubmitting(true)
+    try {
+      const incident = await createReport(payload)
+      // The report is saved; a failed photo must not undo or hide that.
       let photosFailed = 0
-      for (const photo of photos) {
+      for (const photo of form.photos) {
         try {
-          await uploadEvidence(incident.id, photo)
+          await uploadIncidentEvidence(incident.id, photo)
         } catch {
           photosFailed += 1
         }
       }
-      setResult({ id: incident.id, photosSent: photos.length - photosFailed, photosFailed })
-    } catch (err) {
-      setError(`Could not send the report: ${err.message}`)
+      setResult({ incident, photosSent: form.photos.length - photosFailed, photosFailed })
+    } catch (error) {
+      setSubmitError(
+        error.isValidation
+          ? `The server did not accept the report: ${error.message}`
+          : `The report was not sent. ${error.message} Your answers are kept; try again.`,
+      )
     } finally {
-      setSending(false)
+      inFlight.current = false
+      setSubmitting(false)
     }
   }
 
-  function resetForm() {
-    setMode('auto')
-    setTypedAddress('')
-    setPickedAddress('')
-    setRole('victim')
-    setPhone('')
-    setPeople(1)
-    setPhotos([])
-    setDescription('')
-    setError('')
+  function startOver() {
+    setForm(EMPTY_FORM)
+    setErrors({})
     setResult(null)
+    setSubmitError('')
+    setGeoState(null)
+    setPlaceNote(null)
+    setPlaceQuery('')
+    if (fileInput.current) fileInput.current.value = ''
   }
 
+  const errorList = Object.values(errors)
+
   return (
-    <div className="page">
-      <Navbar
-        links={CLIENT_LINKS}
-        action={
-          <Link to="/sos" className="btn btn-danger btn-pill sos-button">
-            SOS · Chat / Call AI
-          </Link>
-        }
-      />
+    <div className="public-page report-page">
+      <header className="public-header">
+        <Link to="/" aria-label="FloodOps home">
+          <Logo size={28} />
+        </Link>
+        <Link to="/" className="btn btn-ghost btn-small">
+          <ArrowLeft size={14} aria-hidden="true" /> Back to start
+        </Link>
+      </header>
 
-      <main className="page-main">
-        <h1 className="page-title">Report a Flood Emergency</h1>
-        <p className="page-subtitle">
-          Your report goes straight to rescue teams. Fields marked * are required.
-        </p>
+      <main className="report-layout">
+        <section className="report-panel" aria-labelledby="report-title">
+          <h1 id="report-title" className="page-heading">
+            Report a flood emergency
+          </h1>
+          <p className="guidance">
+            If you are in immediate danger, also contact local emergency services by any means available. FloodOps is
+            not an official emergency hotline.
+          </p>
 
-        <div className="report-layout">
-          {/* ---------- Left: form or confirmation ---------- */}
           {result ? (
-            <section className="card report-form report-done">
-              <h2 className="done-title">Your report was sent</h2>
-              <p className="page-subtitle">
-                Rescue teams can see it now. Stay where you are if it is safe, and keep your phone
-                on.
+            <div className="report-success" role="status" aria-live="polite">
+              <h2 className="section-heading">Report received</h2>
+              <p>
+                The FloodOps server recorded your report as <strong className="incident-id">{result.incident.id}</strong>.
               </p>
-              <dl className="done-summary">
-                <div>
-                  <dt>Report ID</dt>
-                  <dd>{result.id}</dd>
-                </div>
-                <div>
-                  <dt>Location</dt>
-                  <dd>{address}</dd>
-                </div>
-                {phone.trim() && (
-                  <div>
-                    <dt>Phone</dt>
-                    <dd>{phone.trim()}</dd>
-                  </div>
-                )}
-                <div>
-                  <dt>People</dt>
-                  <dd>{people}</dd>
-                </div>
-                <div>
-                  <dt>Photos</dt>
-                  <dd>{result.photosSent}</dd>
-                </div>
-              </dl>
-              {result.photosFailed > 0 && (
-                <p className="form-error">
-                  {result.photosFailed} photo{result.photosFailed > 1 ? 's' : ''} could not be
-                  uploaded. Your report was still sent.
+              <p className="muted">
+                Receiving a report does not mean a rescue team has been sent. Rescue coordinators review reports and
+                may call you back if you gave a phone number.
+              </p>
+              {form.photos.length > 0 && (
+                <p className={result.photosFailed ? 'form-error' : 'muted'}>
+                  Photos uploaded: {result.photosSent} of {form.photos.length}
+                  {result.photosFailed > 0 && '. Some photos could not be uploaded; the report itself was saved.'}
                 </p>
               )}
-              <div className="done-actions">
-                <Link to="/track" className="btn btn-primary">
-                  Track my report
-                </Link>
-                <button type="button" className="btn btn-outline" onClick={resetForm}>
-                  Send another report
+              <div className="form-actions">
+                <button type="button" className="btn btn-primary" onClick={startOver}>
+                  Submit another report
                 </button>
+                <Link to="/" className="btn btn-ghost">
+                  Back to start
+                </Link>
               </div>
-            </section>
+            </div>
           ) : (
-            <form className="card report-form" onSubmit={handleSubmit}>
-              {/* 1. Location */}
-              <section className="field">
-                <div className="field-head">
-                  <h2 className="field-label">1. Location *</h2>
-                  <p className="hint">{MODE_HINTS[mode]}</p>
+            <form className="report-form" onSubmit={onSubmit} noValidate>
+              {errorList.length > 0 && (
+                <div className="error-summary" role="alert" tabIndex={-1} ref={errorSummary}>
+                  <p className="state-title">Please fix the following:</p>
+                  <ul>
+                    {errorList.map((msg) => (
+                      <li key={msg}>{msg}</li>
+                    ))}
+                  </ul>
                 </div>
+              )}
 
-                <div className="segmented" role="tablist" aria-label="Location mode">
-                  {LOCATION_MODES.map((m) => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      role="tab"
-                      aria-selected={m.id === mode}
-                      className={`segmented-item${m.id === mode ? ' is-active' : ''}`}
-                      onClick={() => setMode(m.id)}
-                    >
-                      {m.label}
-                    </button>
+              <fieldset className="form-section">
+                <legend className="section-label">Who are you reporting for?</legend>
+                <div className="segmented">
+                  {[
+                    ['SELF', 'I need help'],
+                    ['THIRD_PARTY', 'I am reporting for someone else'],
+                  ].map(([value, label]) => (
+                    <label key={value} className={`segmented-item${form.reporterType === value ? ' is-active' : ''}`}>
+                      <input
+                        type="radio"
+                        name="reporterType"
+                        value={value}
+                        checked={form.reporterType === value}
+                        onChange={() => update({ reporterType: value })}
+                      />
+                      {label}
+                    </label>
                   ))}
                 </div>
+              </fieldset>
 
-                {mode === 'auto' && (
-                  <input
-                    className="input"
-                    readOnly
-                    placeholder={geoError || 'Detecting your location…'}
-                    value={coords ? `Detected: ${address}` : ''}
-                    aria-label="Detected address"
-                  />
-                )}
-                {mode === 'type' && (
-                  <input
-                    className="input"
-                    name="address"
-                    autoFocus
-                    placeholder="Enter street, city or zip code"
-                    value={typedAddress}
-                    onChange={(e) => setTypedAddress(e.target.value)}
-                    aria-label="Address"
-                  />
-                )}
-                {mode === 'map' && (
-                  <input
-                    className="input"
-                    readOnly
-                    placeholder="No spot picked yet. Move the map, then press Pick here."
-                    value={pickedAddress ? `Pinned: ${pickedAddress}` : ''}
-                    aria-label="Picked address"
-                  />
-                )}
-              </section>
-
-              <hr className="divider" />
-
-              {/* 2. Role */}
-              <section className="field">
-                <h2 className="field-label">2. Who are you? *</h2>
-                <div className="chips" role="radiogroup" aria-label="Who are you">
-                  {ROLES.map((r) => (
+              <fieldset className="form-section" aria-describedby="location-status">
+                <legend className="section-label">Incident location *</legend>
+                <div className="button-row">
+                  <button type="button" className="btn btn-secondary btn-small" onClick={requestCurrentLocation} disabled={geoState === 'requesting'}>
+                    <LocateFixed size={14} aria-hidden="true" /> Use current location
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-small ${picking ? 'btn-primary' : 'btn-secondary'}`}
+                    aria-pressed={picking}
+                    onClick={() => setPicking((v) => !v)}
+                  >
+                    <Crosshair size={14} aria-hidden="true" /> {picking ? 'Tap the map…' : 'Select on map'}
+                  </button>
+                  {form.coords && (
                     <button
-                      key={r.id}
                       type="button"
-                      role="radio"
-                      aria-checked={role === r.id}
-                      className={`chip${role === r.id ? ' is-active' : ''}`}
-                      onClick={() => setRole(r.id)}
+                      className="btn btn-ghost btn-small"
+                      onClick={() => update({ coords: null, locationMethod: null, accuracy: null })}
                     >
-                      {r.label}
+                      <X size={14} aria-hidden="true" /> Clear point
                     </button>
-                  ))}
+                  )}
                 </div>
-              </section>
 
-              <hr className="divider" />
+                <div id="location-status" className={`location-status${form.coords ? ' has-point' : ''}`} aria-live="polite">
+                  {form.coords ? (
+                    <>
+                      <MapPin size={14} aria-hidden="true" />
+                      <span>
+                        {formatCoords(form.coords)}
+                        <span className="muted block small">
+                          {locationMethodLabel(form.locationMethod)}
+                          {form.accuracy != null && ` · accuracy about ±${form.accuracy} m`}
+                        </span>
+                      </span>
+                    </>
+                  ) : (
+                    <span className="muted">No coordinates selected. A place description below is enough.</span>
+                  )}
+                </div>
+                {geoState && <p className={geoState === 'requesting' ? 'hint' : 'form-error'}>{GEO_MESSAGES[geoState]}</p>}
 
-              {/* 3. Phone */}
-              <section className="field">
-                <h2 className="field-label">3. Phone number (optional)</h2>
-                <input
-                  className="input"
-                  type="tel"
-                  name="phone"
-                  autoComplete="tel"
-                  placeholder="+84 905 123 456"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  aria-invalid={!phoneValid}
-                  aria-label="Phone number"
-                />
-                <p className={phoneValid ? 'hint' : 'form-error'}>
-                  {phoneValid
-                    ? 'Rescue teams use this to call you back.'
-                    : 'Use digits only, with an optional + at the start.'}
-                </p>
-              </section>
+                <label className="field">
+                  <span className="label">Place name, address or landmark</span>
+                  <input
+                    className="input"
+                    value={form.addressText}
+                    onChange={(e) => update({ addressText: e.target.value })}
+                    placeholder="e.g. house near the bridge, Kien Giang, Le Thuy"
+                    aria-invalid={Boolean(errors.location)}
+                    autoComplete="street-address"
+                  />
+                </label>
+                {errors.location && <p className="form-error">{errors.location}</p>}
+              </fieldset>
 
-              <hr className="divider" />
+              <div className="form-section form-pair">
+                <label className="field">
+                  <span className="label">Reported water level</span>
+                  <select className="input" value={form.waterLevel} onChange={(e) => update({ waterLevel: e.target.value })}>
+                    {WATER_LEVELS.map((o) => (
+                      <option key={o.label} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span className="label">Reported severity</span>
+                  <select className="input" value={form.severity} onChange={(e) => update({ severity: e.target.value })}>
+                    {REPORTED_SEVERITIES.map((o) => (
+                      <option key={o.label} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <p className="hint">Water level and severity are added to the start of your description.</p>
 
-              {/* 4 + 5. People and photos side by side */}
-              <div className="field-row">
-                <section className="field">
-                  <h2 className="field-label">4. People at location *</h2>
-                  <div className="stepper">
-                    <button
-                      type="button"
-                      className="stepper-btn"
-                      aria-label="Fewer people"
-                      disabled={people <= 1}
-                      onClick={() => setPeople((n) => Math.max(1, n - 1))}
-                    >
-                      −
-                    </button>
-                    <input
-                      className="stepper-value"
-                      type="number"
-                      name="people"
-                      min="1"
-                      value={people}
-                      onChange={(e) => setPeople(Math.max(1, Number(e.target.value) || 1))}
-                      aria-label="Number of people"
-                    />
-                    <button
-                      type="button"
-                      className="stepper-btn stepper-btn-primary"
-                      aria-label="More people"
-                      onClick={() => setPeople((n) => n + 1)}
-                    >
-                      +
-                    </button>
-                  </div>
-                  <p className="hint">Incl. children, elderly, injured</p>
-                </section>
-
-                <section className="field">
-                  <h2 className="field-label">5. Photos (optional)</h2>
-                  <label className="upload">
-                    <input
-                      type="file"
-                      name="photos"
-                      accept={IMAGE_TYPES.join(',')}
-                      capture="environment"
-                      multiple
-                      onChange={(e) => setPhotos(Array.from(e.target.files ?? []))}
-                    />
-                    {photos.length > 0
-                      ? `${photos.length} photo${photos.length > 1 ? 's' : ''} added`
-                      : 'Upload or take a photo'}
+              <div className="form-section form-pair">
+                <div className="field">
+                  <label className="label" htmlFor="report-people">
+                    People requiring assistance
                   </label>
-                  <p className="hint">Time and location are sent automatically.</p>
-                </section>
+                  <input
+                    id="report-people"
+                    className="input"
+                    inputMode="numeric"
+                    value={form.peopleText}
+                    onChange={(e) => update({ peopleText: e.target.value })}
+                    aria-invalid={Boolean(errors.people)}
+                    aria-describedby="people-hint"
+                  />
+                  <span id="people-hint" className="hint">
+                    Leave empty if unknown.
+                  </span>
+                  {errors.people && <span className="form-error">{errors.people}</span>}
+                </div>
+                <div className="field">
+                  <label className="label" htmlFor="report-phone">
+                    Call-back phone (optional)
+                  </label>
+                  <input
+                    id="report-phone"
+                    className="input"
+                    type="tel"
+                    autoComplete="tel"
+                    value={form.phone}
+                    onChange={(e) => update({ phone: e.target.value })}
+                    placeholder="+84 …"
+                    aria-invalid={Boolean(errors.phone)}
+                  />
+                  {errors.phone && <span className="form-error">{errors.phone}</span>}
+                </div>
               </div>
 
-              <hr className="divider" />
+              <div className="field form-section">
+                <label className="label" htmlFor="report-description">
+                  Describe the situation
+                </label>
+                <textarea
+                  id="report-description"
+                  aria-describedby="description-count"
+                  className="input"
+                  rows={4}
+                  maxLength={Math.max(0, descriptionMax)}
+                  value={form.description}
+                  onChange={(e) => update({ description: e.target.value })}
+                  placeholder="Describe the location, current conditions, immediate dangers, and assistance required."
+                  aria-invalid={Boolean(errors.description)}
+                />
+                <span id="description-count" className="hint">
+                  {form.description.length} / {Math.max(0, descriptionMax)} characters
+                </span>
+                {errors.description && <span className="form-error">{errors.description}</span>}
+              </div>
 
-              {/* 6. Description */}
-              <section className="field">
-                <h2 className="field-label">6. Description (optional)</h2>
-                <div className="textarea-wrap">
-                  <textarea
-                    name="description"
-                    rows="4"
-                    maxLength={MAX_DESCRIPTION}
-                    placeholder="Water level, injuries, children / elderly, pets, can you reach the roof?..."
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                  />
-                  <span className="textarea-count">
-                    {description.length} / {MAX_DESCRIPTION}
-                  </span>
-                </div>
-              </section>
+              <div className="field form-section">
+                <label className="label" htmlFor="report-photos">
+                  Photos (optional)
+                </label>
+                <input
+                  id="report-photos"
+                  aria-describedby="photos-hint"
+                  ref={fileInput}
+                  type="file"
+                  accept={LIMITS.imageTypes.join(',')}
+                  multiple
+                  onChange={(e) => update({ photos: Array.from(e.target.files ?? []) })}
+                  aria-invalid={Boolean(errors.photos)}
+                />
+                <span id="photos-hint" className="hint">
+                  JPEG, PNG or WEBP, up to 10 MB each. Uploaded after the report is saved.
+                </span>
+                {errors.photos && <span className="form-error">{errors.photos}</span>}
+              </div>
 
-              {error && <p className="form-error">{error}</p>}
+              {submitError && (
+                <p className="form-error submit-error" role="alert">
+                  {submitError}
+                </p>
+              )}
 
-              <button type="submit" className="btn btn-primary submit-button" disabled={!canSubmit}>
-                {sending ? 'Sending…' : 'Send Rescue Request'}
+              <button type="submit" className="btn btn-danger btn-block" disabled={submitting} aria-busy={submitting}>
+                <FileText size={16} aria-hidden="true" />
+                {submitting ? 'Sending report…' : 'Submit Emergency Report'}
               </button>
             </form>
           )}
+        </section>
 
-          {/* ---------- Right: map ---------- */}
-          <MapPlaceholder className="report-map">
-            <MapMarker type="pin" x={50} y={45} label="Your location" />
-
-            <div className="map-search">
-              <div className="map-search-row">
-                <input
-                  className="input map-search-input"
-                  placeholder={
-                    mode === 'map' ? 'Drag the map to move the pin' : 'City or Zip Code Search'
-                  }
-                  readOnly={mode === 'map'}
-                />
-                {mode === 'map' ? (
-                  <button
-                    type="button"
-                    className="btn btn-danger map-search-button"
-                    onClick={() => setPickedAddress(PICKED_ADDRESS)}
-                  >
-                    Pick here
-                  </button>
-                ) : (
-                  <button type="button" className="btn btn-primary map-search-button">
-                    Search
-                  </button>
-                )}
-              </div>
-              <button type="button" className="link-button" onClick={() => setMode('auto')}>
-                Use my location
-              </button>
-            </div>
-          </MapPlaceholder>
-        </div>
+        <MapView
+          className={`report-map${picking ? ' is-picking' : ''}`}
+          label="Report location map"
+          incidents={[]}
+          reportPoint={form.coords}
+          onMapClick={onMapClick}
+          focus={focus}
+        >
+          <form className="map-overlay map-overlay-top-left map-search" role="search" onSubmit={findPlace}>
+            <input
+              className="input"
+              type="search"
+              value={placeQuery}
+              onChange={(e) => setPlaceQuery(e.target.value)}
+              placeholder="Find a place on the map"
+              aria-label="Find a place on the map"
+            />
+            <button type="submit" className="btn btn-primary btn-small" aria-label="Find place">
+              <Search size={14} aria-hidden="true" />
+            </button>
+          </form>
+          {(placeNote || picking) && (
+            <p className={`map-note map-note-top${placeNote?.kind === 'error' ? ' is-error' : ''}`} role="status">
+              {placeNote?.text ?? 'Tap the map to mark the incident location.'}
+            </p>
+          )}
+          <div className="map-overlay map-overlay-bottom-left">
+            <MapLegend showIncidents={false} showTeams={false} showFlood={false} showReportPoint />
+          </div>
+        </MapView>
       </main>
     </div>
   )

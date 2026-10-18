@@ -22,10 +22,13 @@ API docs: http://127.0.0.1:8000/docs
 cd frontend
 npm install
 npm run dev                        # http://localhost:5173
+npm test                           # Vitest unit + component tests
+npm run build                      # production build in dist/
 ```
-- `/` report form (citizen)
-- `/admin` dispatcher map
-- `/sos` voice call demo page (still mock data)
+- `/` landing, `/report` public report form, `/access` → `/ops` rescue operations console
+  (Overview, Reports, Live Map, Rescue Teams, Drone Evidence, Activity Log, Settings via the gear menu)
+- Live / Simulation / Replay data modes; see `frontend/docs/DEMO_GUIDE.md`
+- API contract and gaps: `frontend/docs/API_CONTRACT.md`; architecture: `frontend/docs/FRONTEND_ARCHITECTURE.md`
 
 Vite proxies `/api` to the backend on port 8000 (`frontend/vite.config.js`), so start the backend first.
 
